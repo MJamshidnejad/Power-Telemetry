@@ -1,0 +1,129 @@
+#include <mega32.h>
+#include <stdio.h>         
+#include <delay.h>              
+#asm
+   .equ __lcd_port=0x1b
+#endasm
+#include <lcd.h>
+
+#define RXB8 1
+#define TXB8 0
+#define UPE 2
+#define OVR 3
+#define FE 4
+#define UDRE 5
+#define RXC 7
+
+#define FRAMING_ERROR (1<<FE)
+#define PARITY_ERROR (1<<UPE)
+#define DATA_OVERRUN (1<<OVR)
+#define DATA_REGISTER_EMPTY (1<<UDRE)
+#define RX_COMPLETE (1<<RXC)  
+                     
+#define RT    PORTD.2
+#define TRUE  1
+#define FALSE 0                       
+
+#define XTAL  11059200
+
+
+void USART_Master_Init(unsigned int baud,char u2x);
+void USART_Master_Receive(unsigned char *data);    
+void USART_Master_Send(unsigned char *data,unsigned char address);
+
+char Error,Msg_Rec;
+char buffer[20],receive_buf[20],send_buf[20]={5,'H','e','l','l','o'};
+unsigned int cou;
+              
+
+//-----------------------------------------
+// USART Receiver interrupt service routine
+interrupt [USART_RXC] void usart_rx_isr(void)
+{
+      USART_Master_Receive(receive_buf);
+}                                          
+//-----------------------------------------
+void main(){
+	unsigned int i;  
+	DDRD=0x04;
+	DDRA=0xFF;
+	RT=0;
+	Msg_Rec=FALSE; 
+	Error=FALSE;
+	lcd_init(16);
+   USART_Master_Init(9600,0);  
+	#asm("sei")
+	while (1)
+	{                
+      
+		USART_Master_Send(send_buf,45);  
+    	USART_Master_Send(send_buf,42);             
+   
+    	if (Error)                      
+      	PORTA = 0xAA;                    
+		if (Msg_Rec) {                      
+      	Msg_Rec=FALSE;                       
+	      for (i = 2; i <= receive_buf[1]+1;i++){   	     
+      	  	lcd_clear();
+     	  		sprintf(buffer,"data=%c",receive_buf[i]);
+	      	lcd_puts(buffer); 
+   	   	delay_ms(300);        
+	      }                                
+   	   delay_ms(1);
+       	USART_Master_Send(send_buf,receive_buf[0]);
+    	}               
+   };              
+}   
+//------------------------
+void USART_Master_Init(unsigned int baud,char u2x)
+{               
+	unsigned int	BudeRate;       
+	// USART initialization
+	// Communication Parameters: 8 Data, 1 Stop, No Parity
+	// USART Receiver: On
+	// USART Transmitter: On
+	// USART Mode: Asynchronous
+	UCSRA=0x00;
+	UCSRB=0x9C;
+	UCSRC=0x86;
+  	if(u2x)
+	 	BudeRate = XTAL / 8 / baud - 1;
+	else                            
+		BudeRate = XTAL / 16 / baud - 1;
+ 
+   UBRRH = (unsigned char)(BudeRate >> 8); 
+   UBRRL = (unsigned char)BudeRate; 
+   
+}
+//---------------------------
+void USART_Master_Send(unsigned char *data, unsigned char address)
+{
+	unsigned char i;    
+	RT=1;
+   while(!(UCSRA & (1<<UDRE)));
+	UCSRB |= (1 << TXB8);  
+   UDR=address;                           
+   for(i=0;i <= data[0];i++)
+   {  	       	                         
+	   while(!(UCSRA & (1<<UDRE)));
+	   UCSRB &= ~(1 << TXB8);
+	   UDR=data[i];   	   
+   }    
+   RT=0;  
+}                                     
+//------------------------
+void USART_Master_Receive(unsigned char *data)
+{
+  	unsigned char input,status;
+  	status=UCSRA;
+	if ((status & (FRAMING_ERROR | PARITY_ERROR | DATA_OVERRUN))==0){    
+		Error=FALSE;
+  	 	input=UDR;  	 	   	 	
+  	  	data[cou] = input;      		      	
+      if(cou++==data[1]+1){     	
+     		Msg_Rec=TRUE;
+     		cou=0;
+     	}     		    	            		          	              
+        
+   }else Error=TRUE;	                           
+}                             

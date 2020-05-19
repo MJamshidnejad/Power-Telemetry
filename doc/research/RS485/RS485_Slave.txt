@@ -1,0 +1,141 @@
+#include <mega32.h>
+#include <stdio.h>         
+#include <delay.h>
+#asm
+   .equ __lcd_port=0x1b
+#endasm
+#include <lcd.h>
+        
+#define RXB8 1
+#define TXB8 0
+#define UPE 2
+#define OVR 3
+#define FE 4
+#define UDRE 5
+#define RXC 7
+
+#define FRAMING_ERROR (1<<FE)
+#define PARITY_ERROR (1<<UPE)
+#define DATA_OVERRUN (1<<OVR)
+#define DATA_REGISTER_EMPTY (1<<UDRE)
+#define RX_COMPLETE (1<<RXC)    
+
+#define RT PORTD.2
+#define Slave_Address 45
+#define XTAL 11059200
+
+#define  TRUE  1
+#define  FALSE 0
+
+char buffer[20],receive_buf[20],send_buf[20]={5,'S','l','a','v','e'};
+char Error,Msg_Rec;
+unsigned int cou;  
+            
+void USART_slave_Init(unsigned int baud,char u2x);   
+void USART_Slave_Receive(unsigned char *data);
+void USART_Slave_Send(unsigned char *data);  
+
+
+//-------------------------------------
+// USART Receiver interrupt service routine
+interrupt [USART_RXC] void usart_rx_isr(void)
+{
+      USART_Slave_Receive(receive_buf);
+}                                      
+//----------------------------------------
+void main(){        	
+	unsigned int i,len;
+	DDRD=0x04; 
+	RT=0;
+	lcd_init(16);
+	lcd_clear();	 
+	USART_slave_Init(9600,0);   
+	Msg_Rec=FALSE; 
+	Error=FALSE;
+	#asm("sei")     
+   while (1){                   
+      if(Error){       
+      	 lcd_clear();
+     	  	 sprintf(buffer,"Error");
+      	 lcd_puts(buffer);
+      }    	
+    	if (Msg_Rec) {                     
+      	 Msg_Rec=FALSE;                 
+      	 len=receive_buf[0];
+      	 for (i = 1; i <= len;i++){       
+        		lcd_clear();
+     	  		sprintf(buffer,"data=%c",receive_buf[i]);
+      		lcd_puts(buffer); 
+      		delay_ms(300);
+      	 }                              
+      	 delay_ms(1);
+      	 USART_Slave_Send(send_buf);         
+    	}                     
+	};              
+}   
+//------------------------
+void USART_slave_Init(unsigned int baud,char u2x)
+{               
+	unsigned int	BudeRate;       
+	// USART initialization
+	// Communication Parameters: 8 Data, 1 Stop, No Parity
+	// USART Receiver: On
+	// USART Transmitter: On
+	// USART Mode: Asynchronous
+	UCSRA=0x01;  // Bit MPCM=1
+	UCSRB=0x9c;
+	UCSRC=0x86;
+	if(u2x)
+	 	BudeRate = XTAL / 8 / baud - 1;
+	else                            
+		BudeRate = XTAL / 16 / baud - 1;
+ 
+   UBRRH = (unsigned char)(BudeRate >> 8); 
+   UBRRL = (unsigned char)BudeRate;       
+ 
+}
+//------------------------
+void USART_Slave_Receive(unsigned char *data)
+{  
+	unsigned char input,status;	
+  	status=UCSRA;
+	if ((status & (FRAMING_ERROR | PARITY_ERROR | DATA_OVERRUN))==0){    
+		Error=FALSE;
+  	 	input=UDR;   	 	
+  	  	if(UCSRA & 0x01){
+  			if(input == Slave_Address){                        
+ 		 		UCSRA &= 0xFE;     // Bit MPCM=0  	   			
+ 				cou=0;
+ 			}
+      }else{          
+      	
+        	data[cou] = input;      		      	
+        	if(cou++==data[0]){
+     			UCSRA |= 0x01;    // Bit MPCM=1      		
+     	 		Msg_Rec=TRUE;
+     		}     		    	            		          	              
+      }  
+   }else Error=TRUE;
+}
+//------------------------
+      
+void USART_Slave_Send(unsigned char *data)
+{      
+      
+  	unsigned char i;  
+  	RT=1;
+  	while(!(UCSRA & (1<<UDRE)));  
+	UCSRB &= ~(1 << TXB8);	   
+	UDR=Slave_Address;     	             
+   for(i=0;i <= data[0];i++)
+   {  	       	                         
+	   while(!(UCSRA & (1<<UDRE)));  
+	   UCSRB &= ~(1 << TXB8);	   
+	   UDR=data[i];   	   
+   }   
+   RT=0;        	  
+}  	            
+  	  
+	 
+		
+

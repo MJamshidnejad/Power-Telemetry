@@ -1,0 +1,53 @@
+#include "ModbusRtu.h"
+#include "tdl104_defs.h"
+#include "Streaming.h"
+
+#define SERIAL_0      0
+#define MASTER_MODE   0
+#define TDL104_ID      14
+#define TDL104_SPEED  115200
+#define TXPIN_EN      4
+#define BUFFER_SIZE   64
+
+Modbus master(MASTER_MODE, SERIAL_0, TXPIN_EN);
+uint16_t modbus_buffer[BUFFER_SIZE];
+
+modbus_t packet= {
+  .u8id = TDL104_ID,
+    .u8fct = MB_FC_READ_INPUT_REGISTER,
+    .u16RegAdd = F4_4_V31,
+    .u16CoilsNo = 1,
+    .au16reg = modbus_buffer
+};
+
+typedef struct {
+  uint16_t v1,v2,v3;
+  uint16_t p1,p2,p3;
+  uint16_t temp, freq;
+  uint8_t relay_status;
+} data_buffer;
+data_buffer data;
+
+void setup()
+{
+  master.begin(TDL104_SPEED, SERIAL_8N2);
+  master.setTimeOut( 500 );
+
+}
+
+void loop()
+{
+   master.query(packet);
+
+  do{
+      master.poll();
+  }
+  while(master.getState() == COM_WAITING);
+
+  Serial<<'\n'<<endl;
+  Serial<<modbus_buffer[0]<<modbus_buffer[1]<<modbus_buffer[2]<<modbus_buffer[3]<<endl;
+  Serial<<modbus_buffer[4]<<modbus_buffer[5]<<modbus_buffer[6]<<modbus_buffer[7]<<endl;
+
+  delay(2000);
+
+}

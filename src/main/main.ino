@@ -1,0 +1,260 @@
+#if true
+#include "ModbusRtu.h"
+#include "tdl104_defs.h"
+#include "Streaming.h"
+#include <SoftwareSerial.h>
+
+#define MODBUS_SERIAL    1
+#define MASTER_MODE      0
+#define TDL104_ID        14
+#define TDL104_SPEED     115200
+#define TXPIN_EN         4
+#define BUFFER_SIZE      64
+
+
+// Select your modem:
+#define TINY_GSM_MODEM_A6
+#define BLYNK_HEARTBEAT 120
+
+#define SerialMon Serial
+#define TINY_GSM_DEBUG SerialMon
+
+#define BLYNK_PRINT Serial // Defines the object that is used for printing
+#define BLYNK_DEBUG        // Optional, this enables more detailed prints
+
+#include <TinyGsmClient.h>
+#include <BlynkSimpleSIM800.h>
+
+/*
+// Software Serial
+const byte rxPin = 7;
+const byte txPin = 8;
+SoftwareSerial softSerial(rxPin, txPin);
+*/
+#define SerialAT Serial2
+TinyGsm modem(SerialAT);
+
+// Your GPRS credentials
+const char apn[]  = "mcinet";
+const char user[] = "";
+const char pass[] = "";
+
+const char auth[] = "e8fa4364e0f84b80a53d578d81abc055";
+
+/********* TDL104 Setup *************/
+Modbus master(MASTER_MODE, MODBUS_SERIAL, TXPIN_EN);
+uint16_t modbus_buffer[BUFFER_SIZE];
+modbus_t packet[3] = {
+  {.u8id = TDL104_ID,
+     .u8fct = MB_FC_READ_REGISTERS,
+     .u16RegAdd = F3_2_TIME_MIN,
+     .u16CoilsNo = 1,
+     .au16reg = modbus_buffer
+  },
+  {.u8id = TDL104_ID,
+     .u8fct = MB_FC_READ_INPUT_REGISTER,
+     .u16RegAdd = F4_4_V1,
+     .u16CoilsNo = 1,
+     .au16reg = modbus_buffer
+  },
+  {.u8id = TDL104_ID,
+     .u8fct = MB_FC_WRITE_REGISTER,
+     .u16RegAdd = F3_2_TIME_MIN,
+     .u16CoilsNo = 1,
+     .au16reg = modbus_buffer
+  }
+};
+
+typedef struct {
+  uint16_t v1,v2,v3;
+  uint16_t p1,p2,p3;
+  uint16_t temp, freq;
+  uint8_t relay_status;
+} data_buffer;
+data_buffer data;
+
+
+/******** Function prototypes *********/
+
+int8_t get_f3(uint16_t reg);
+
+int8_t get_f4(uint16_t reg);
+
+int8_t write_f6(uint16_t reg);
+
+void get_voltages(data_buffer *data);
+
+void get_powers(data_buffer *data);
+
+void get_temp_freq(data_buffer *data);
+
+void get_relay_status(data_buffer *data);
+
+void pumper(data_buffer *data);
+
+/******* Blynk Setup*******/
+
+BlynkTimer timer;
+
+void dataStreaming()
+{
+  pumper(&data);
+
+  Serial<<'\n'<<endl;
+  Serial<<"V1: "<<data.v1<<", V2: "<<data.v2<<", V3: "<<data.v3<<endl;
+  Serial<<"P1: "<<data.p1<<", P2: "<<data.p2<<", P3: "<<data.p3<<endl;
+  Serial<<"Tempeture: "<<data.temp<<", Frequncy: "<<data.freq<<endl;
+  Serial<<"Relay status code: "<<data.relay_status<<endl;
+
+  Blynk.virtualWrite(V1, data.v1);
+  Blynk.virtualWrite(V2, data.v2);
+  Blynk.virtualWrite(V3, data.v3);
+
+  Blynk.virtualWrite(V0, "clr");
+  Blynk.virtualWrite(V0, "add", 1, "P1", data.p1);
+  Blynk.virtualWrite(V0, "add", 2, "P2", data.p2);
+  Blynk.virtualWrite(V0, "add", 3, "P3", data.p3);
+  Blynk.virtualWrite(V0, "add", 4, "Tempeture", data.temp);
+  Blynk.virtualWrite(V0, "add", 5, "Frequncy", data.freq);
+}
+
+
+
+void setup() {
+  Serial.begin(115200);
+  TinyGsmAutoBaud(SerialAT);
+  modem.setBaud(115200);
+  TinyGsmAutoBaud(SerialAT);
+
+  // Unlock SIM card with a PIN
+  //modem.simUnlock("0538");
+
+  //SerialAT.print("AT+EGMR=1,7,\"868030022500910\"\r\n");
+  
+  String imei = modem.getIMEI();
+  SerialMon.println(imei);
+
+  Blynk.begin(auth, modem, apn, user, pass);
+  timer.setInterval(7000L, dataStreaming);
+
+  master.begin(TDL104_SPEED, SERIAL_8N2);
+  master.setTimeOut( 500 );
+
+
+  String ccid = modem.getSimCCID();
+  SerialMon.println(ccid);
+
+  imei = modem.getIMEI();
+  SerialMon.println(imei);
+
+  String cop = modem.getOperator();
+  SerialMon.println(cop);
+  
+  IPAddress local = modem.localIP();
+  SerialMon.println(local);
+
+  int csq = modem.getSignalQuality();
+  SerialMon.println(csq);
+
+  delay(2000);
+}
+
+void loop() {
+
+  Blynk.run();
+  timer.run();
+}
+
+
+/*************** Function Description *****************/
+
+int8_t get_f3(uint16_t reg)
+{
+  int8_t result = 0;
+  packet[0].u16RegAdd = reg;
+  master.query(packet[0]);
+
+  do{
+      master.poll();
+  }
+  while(master.getState() == COM_WAITING);
+
+  return result;
+}
+
+int8_t get_f4(uint16_t reg)
+{
+  int8_t result = 0;
+  packet[1].u16RegAdd = reg;
+  master.query(packet[1]);
+
+  do{
+      master.poll();
+  }
+  while(master.getState() == COM_WAITING);
+
+  return result;
+}
+
+int8_t write_f6(uint16_t reg)
+{
+
+}
+
+void get_voltages(data_buffer *data)
+{
+    get_f4(F4_4_V1);
+    data->v1 = modbus_buffer[1];
+    
+    get_f4(F4_4_V2);
+    data->v2 = modbus_buffer[1];
+    
+    get_f4(F4_4_V3);
+    data->v3 = modbus_buffer[1];
+}
+
+void get_powers(data_buffer *data)
+{
+    get_f4(F4_4_P1);
+    data->p1 = modbus_buffer[1];
+    
+    get_f4(F4_4_P2);
+    data->p2 = modbus_buffer[1];
+    
+    get_f4(F4_4_P3);
+    data->p3 = modbus_buffer[1];
+}
+
+void get_temp_freq(data_buffer *data)
+{
+    get_f4(F4_2_TEMP);
+    data->temp = modbus_buffer[0];
+    
+    get_f4(F4_2_FREQ);
+    data->freq = modbus_buffer[0];
+}
+
+void get_relay_status(data_buffer *data)
+{
+    get_f3(F3_2_RELAY_STATUS);
+    data->relay_status = modbus_buffer[0];
+}
+
+
+void pumper(data_buffer *data)
+{
+  get_voltages(data);
+  get_powers(data);
+  get_temp_freq(data);
+  get_relay_status(data);
+}
+#else
+// Test section
+void setup() {
+  Serial.end();
+}
+
+void loop(){
+}
+
+#endif
